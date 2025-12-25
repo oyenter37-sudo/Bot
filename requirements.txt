@@ -1,6 +1,0 @@
-aiogram
-g4f
-aiohttp
-aiosqlite
-Telebot
-Pillow
