@@ -1,0 +1,6 @@
+aiogram==3.22.0
+g4f==6.7.4
+aiohttp==3.13.2
+aiosqlite==0.21.0
+pyTelegramBotAPI==4.29.1
+Pillow==11.1.0
