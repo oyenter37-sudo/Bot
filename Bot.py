@@ -894,7 +894,7 @@ def support_keyboard(is_main_admin: bool = False):
     if is_main_admin:
         buttons.append([InlineKeyboardButton(text="☢️ СУПЕР ОЧИСТКА ☢️", callback_data="super_reset")])
     buttons.append([InlineKeyboardButton(text="Назад ◀️◀️◀️", callback_data="menu")]
-    ])
+                  )
 
 
 def shop_keyboard(is_admin: bool = False):
@@ -5436,3 +5436,4 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 ```
+
