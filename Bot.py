@@ -1,5 +1,5 @@
 # =====================================
-# 🦔 ГОВОРЯЩИЙ ЕЖ - TELEGRAM BOT v3.5 (Update) 🦔
+# 🦔 ГОВОРЯЩИЙ ЕЖ - TELEGRAM BOT v3.7 (Full Features) 🦔
 # =====================================
 # ЧАСТЬ 1/5: Импорты, настройки, БД, утилиты
 
@@ -102,11 +102,12 @@ DEFAULT_SHOP_ITEMS = [
 ]
 
 # =====================================
-# 🗄️ БАЗА ДАННЫХ
+# 🗄️ БАЗА ДАННЫХ (САМОЛЕЧАЩАЯСЯ)
 # =====================================
+
 async def init_db():
     async with aiosqlite.connect(DB_NAME) as db:
-        # 1. СОЗДАЕМ ТАБЛИЦЫ (Базовая структура)
+        # 1. СОЗДАЕМ ТАБЛИЦЫ
         await db.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -258,8 +259,7 @@ async def init_db():
             )
         ''')
         
-        # 2. МИГРАЦИЯ (САМОЕ ВАЖНОЕ)
-        # Мы добавляем недостающие колонки ПЕРЕД тем, как вставлять данные
+        # 2. МИГРАЦИЯ (ДОБАВЛЕНИЕ КОЛОНОК)
         new_columns = [
             ("users", "player_number", "INTEGER"),
             ("users", "is_injured", "INTEGER DEFAULT 0"),
@@ -278,23 +278,22 @@ async def init_db():
         for table, column, col_type in new_columns:
             try:
                 await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
-                # Игнорируем ошибку, если колонка уже есть
             except:
                 pass
         
         await db.commit()
 
-        # 3. ВСТАВКА ДАННЫХ ПО УМОЛЧАНИЮ
-        # Теперь это безопасно, так как колонки точно существуют
+        # 3. ВСТАВКА ДАННЫХ
         await db.execute('''
             INSERT OR IGNORE INTO admins (username, added_by, added_at, can_edit_promos)
             VALUES (?, 'system', ?, 1)
         ''', (MAIN_ADMIN_USERNAME, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
         
-        # Добавляем стандартные товары (с проверкой на существование)
+        # Товары
         for name, price in DEFAULT_SHOP_ITEMS:
             await db.execute('INSERT OR IGNORE INTO shop_items (name, price, currency) VALUES (?, ?, "balance")', (name, price))
         
+        # Настройки
         default_settings = [
             ("maintenance_mode", "0"),
             ("feed_cost", "150"),
@@ -307,7 +306,7 @@ async def init_db():
         
         await db.commit()
         
-        # 4. ФИНАЛЬНАЯ ПРОВЕРКА НОМЕРОВ ИГРОКОВ
+        # Нумерация игроков
         async with db.execute("SELECT user_id FROM users WHERE player_number IS NULL ORDER BY rowid") as cursor:
             users_without_number = await cursor.fetchall()
         
@@ -319,44 +318,7 @@ async def init_db():
                 await db.execute("UPDATE users SET player_number = ? WHERE user_id = ?", (i, uid))
             await db.commit()
         
-        print("✅ База данных успешно инициализирована (все колонки на месте)!")
-        
-        # Миграция старой БД
-        new_columns = [
-            ("users", "player_number", "INTEGER"),
-            ("users", "is_injured", "INTEGER DEFAULT 0"),
-            ("users", "is_banned", "INTEGER DEFAULT 0"),
-            ("users", "ban_reason", "TEXT"),
-            ("users", "casino_wins", "INTEGER DEFAULT 0"),
-            ("users", "casino_losses", "INTEGER DEFAULT 0"),
-            ("users", "total_casino_profit", "INTEGER DEFAULT 0"),
-            ("users", "elephant_skin", "INTEGER DEFAULT 0"), # Новая валюта
-            ("promocodes", "created_by", "TEXT DEFAULT 'Unknown'"),
-            ("promocodes", "created_at", "TEXT"),
-            ("shop_items", "currency", "TEXT DEFAULT 'balance'"),
-            ("admins", "can_edit_promos", "INTEGER DEFAULT 0")
-        ]
-        
-        for table, column, col_type in new_columns:
-            try:
-                await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
-                await db.commit()
-            except:
-                pass
-        
-        # Присваиваем номера игрокам
-        async with db.execute("SELECT user_id FROM users WHERE player_number IS NULL ORDER BY rowid") as cursor:
-            users_without_number = await cursor.fetchall()
-        
-        if users_without_number:
-            async with db.execute("SELECT COALESCE(MAX(player_number), 0) FROM users") as cursor:
-                max_num = (await cursor.fetchone())[0]
-            
-            for i, (uid,) in enumerate(users_without_number, start=max_num + 1):
-                await db.execute("UPDATE users SET player_number = ? WHERE user_id = ?", (i, uid))
-            await db.commit()
-        
-        print("✅ База данных v3.5 (Update) готова!")
+        print("✅ База данных инициализирована корректно!")
 
 
 async def reset_database():
@@ -931,8 +893,8 @@ def support_keyboard(is_main_admin: bool = False):
     ]
     if is_main_admin:
         buttons.append([InlineKeyboardButton(text="☢️ СУПЕР ОЧИСТКА ☢️", callback_data="super_reset")])
-    buttons.append([InlineKeyboardButton(text="Назад ◀️◀️◀️", callback_data="menu")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    buttons.append([InlineKeyboardButton(text="Назад ◀️◀️◀️", callback_data="menu")]
+    ])
 
 
 def shop_keyboard(is_admin: bool = False):
@@ -993,9 +955,10 @@ def sell_confirm_keyboard(item_index: int):
         ]
     ])
 
-def exchange_keyboard(): # New
+def exchange_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Обменять 45 еж. на 1 кожу", callback_data="do_exchange")],
+        [InlineKeyboardButton(text="🔄 45 Еж. -> 1 Кожа", callback_data="do_exchange_to_skin")],
+        [InlineKeyboardButton(text="🔄 1 Кожа -> 45 Еж.", callback_data="do_exchange_to_balance")],
         [InlineKeyboardButton(text="Назад ◀️◀️◀️", callback_data="menu")]
     ])
 
@@ -1955,6 +1918,26 @@ async def select_color(callback: CallbackQuery, state: FSMContext):
 # =====================================
 # Inline "finances" убран из меню, но обработчик оставлен для навигации
 
+# ИСПРАВЛЕНИЕ: Добавлен хендлер для кнопки "Финансы" из клавиатуры финансов (кнопка "Назад" в топах)
+@router.callback_query(F.data == "finances")
+async def finances_menu(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    if not await check_access(bot, callback.from_user.id, callback):
+        return
+    
+    user = await get_user(callback.from_user.id)
+    is_user_admin = await is_admin(callback.from_user.id)
+    status = "👑 Админ" if is_user_admin else "🎮 Игрок"
+    
+    await safe_edit_text(
+        callback.message,
+        f"🦔🌟 В этом разделе все по твоим деньгам 🌟🦔\n\n"
+        f"Твой баланс: {user['balance']} Ежидзиков👍\n"
+        f"🐘 Кожа слона: {user['elephant_skin']}\n"
+        f"Твой статус: {status}",
+        reply_markup=finances_keyboard()
+    )
+
 @router.callback_query(F.data == "top_balance")
 async def top_balance_menu(callback: CallbackQuery):
     if not await check_access(bot, callback.from_user.id, callback):
@@ -2280,7 +2263,7 @@ async def call_hedgehog(callback: CallbackQuery, state: FSMContext):
     )
 
 # =====================================
-# ♻️ ОБМЕННИК (NEW)
+# ♻️ ОБМЕННИК
 # =====================================
 
 @router.callback_query(F.data == "exchange")
@@ -2293,7 +2276,8 @@ async def exchange_menu(callback: CallbackQuery, state: FSMContext):
     
     text = (
         f"🦔♻️ Здесь можно обменять валюту!\n\n"
-        f"⚡ Текущий курс - 45 ежидзиков👍 = 1 кожа слона.\n\n"
+        f"⚡ Курс покупки: 45 Ежидзиков👍 = 1 Кожа слона\n"
+        f"⚡ Курс продажи: 1 Кожа слона = 45 Ежидзиков👍\n\n"
         f"У тебя:\n"
         f"💰 {user['balance']} Ежидзиков👍\n"
         f"🐘 {user['elephant_skin']} Кожи слона"
@@ -2301,8 +2285,8 @@ async def exchange_menu(callback: CallbackQuery, state: FSMContext):
 
     await safe_edit_text(callback.message, text, reply_markup=exchange_keyboard(), media_screen="exchange")
 
-@router.callback_query(F.data == "do_exchange")
-async def process_exchange(callback: CallbackQuery):
+@router.callback_query(F.data == "do_exchange_to_skin")
+async def process_exchange_to_skin(callback: CallbackQuery):
     if not await check_access(bot, callback.from_user.id, callback):
         return
         
@@ -2319,6 +2303,26 @@ async def process_exchange(callback: CallbackQuery):
         await db.commit()
     
     await callback.answer("✅ Обмен выполнен! +1 Кожа слона")
+    await exchange_menu(callback, FSMContext(storage=storage, key=callback.from_user.id)) # Refresh
+
+@router.callback_query(F.data == "do_exchange_to_balance")
+async def process_exchange_to_balance(callback: CallbackQuery):
+    if not await check_access(bot, callback.from_user.id, callback):
+        return
+        
+    user = await get_user(callback.from_user.id)
+    skin = user['elephant_skin']
+    
+    if skin < 1:
+        await callback.answer("❌ У тебя нет Кожи слона!", show_alert=True)
+        return
+
+    reward = 45
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("UPDATE users SET elephant_skin = elephant_skin - 1, balance = balance + ? WHERE user_id = ?", (reward, user['user_id']))
+        await db.commit()
+    
+    await callback.answer(f"✅ Обмен выполнен! +{reward} Ежидзиков👍")
     await exchange_menu(callback, FSMContext(storage=storage, key=callback.from_user.id)) # Refresh
 
 # =====================================
@@ -2624,12 +2628,7 @@ async def process_custom_bet(message: Message, state: FSMContext):
         )
         await state.set_state(None)
     elif game_type == "star":
-        await message.answer(
-            f"🌟 Найди звезду!\n\nПоле 5×5, в нём спрятано 5 звёзд ⭐\n...",
-             reply_markup=star_field_keyboard(["❌"]*25, []) # По сути рестарт логики
-        )
         # Для звезды сложнее, там логика инициализации в bet_star handler
-        # Придется продублировать инициализацию
         field = ["❌"] * 25
         star_positions = random.sample(range(25), 5)
         for pos in star_positions:
@@ -4093,7 +4092,7 @@ async def admin_all_promos(callback: CallbackQuery):
         await safe_edit_text(callback.message, "🎟 Промокодов пока нет.", reply_markup=back_button("admin_panel"))
         return
     
-    # Inline pagination logic ... same as before but now check permission
+    # Inline pagination logic
     await show_promos_page(callback, promos, 0)
 
 async def show_promos_page(callback: CallbackQuery, promos: list, page: int):
@@ -4122,10 +4121,6 @@ async def show_promos_page(callback: CallbackQuery, promos: list, page: int):
     if page < total_pages - 1:
         nav.append(InlineKeyboardButton(text="➡️", callback_data=f"promo_page_{page + 1}"))
     buttons.append(nav)
-    
-    # New: Add share button logic for recent or just list
-    # Let's add specific Share button in detail view? No, list view is compact.
-    # User asked for "Send" button AFTER creation. Here just delete.
     
     buttons.append([InlineKeyboardButton(text="Назад ◀️◀️◀️", callback_data="admin_panel")])
     
@@ -5311,10 +5306,12 @@ async def process_promocode(message: Message, user_id: int, code: str):
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM used_promocodes WHERE user_id = ? AND code = ?", (user_id, code)) as cursor:
             if await cursor.fetchone():
+                await message.answer("❌ Вы уже активировали этот промокод!")
                 return
         async with db.execute("SELECT * FROM promocodes WHERE code = ? AND uses_left > 0", (code,)) as cursor:
             promo = await cursor.fetchone()
         if not promo:
+            # Не отвечаем, если это просто текст
             return
         
         reward_type = promo['reward_type']
@@ -5429,7 +5426,7 @@ async def main():
     await init_db()
     asyncio.create_task(ant_income_loop())
     print("=" * 50)
-    print("🦔 Бот 'Говорящий Еж' v3.5 (Update) запущен!")
+    print("🦔 Бот 'Говорящий Еж' v3.7 (Full Features) запущен!")
     print("=" * 50)
     print(f"👑 Главный админ: @{MAIN_ADMIN_USERNAME}")
     print(f"📢 Канал: {CHANNEL_LINK}")
@@ -5438,6 +5435,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
-
+```
