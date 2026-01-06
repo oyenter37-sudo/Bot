@@ -104,9 +104,9 @@ DEFAULT_SHOP_ITEMS = [
 # =====================================
 # 🗄️ БАЗА ДАННЫХ
 # =====================================
-
 async def init_db():
     async with aiosqlite.connect(DB_NAME) as db:
+        # 1. СОЗДАЕМ ТАБЛИЦЫ (Базовая структура)
         await db.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -188,11 +188,6 @@ async def init_db():
         ''')
         
         await db.execute('''
-            INSERT OR IGNORE INTO admins (username, added_by, added_at, can_edit_promos)
-            VALUES (?, 'system', ?, 1)
-        ''', (MAIN_ADMIN_USERNAME, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-        
-        await db.execute('''
             CREATE TABLE IF NOT EXISTS custom_commands (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 command TEXT UNIQUE,
@@ -212,10 +207,6 @@ async def init_db():
                 currency TEXT DEFAULT 'balance'
             )
         ''')
-        
-        # Добавляем валюту 'balance' для старых товаров если нет
-        for name, price in DEFAULT_SHOP_ITEMS:
-            await db.execute('INSERT OR IGNORE INTO shop_items (name, price, currency) VALUES (?, ?, "balance")', (name, price))
         
         await db.execute('''
             CREATE TABLE IF NOT EXISTS inventory (
@@ -252,7 +243,6 @@ async def init_db():
             )
         ''')
         
-        # Таблица для медиа экранов (/add)
         await db.execute('''
             CREATE TABLE IF NOT EXISTS screen_media (
                 screen_name TEXT PRIMARY KEY,
@@ -268,6 +258,43 @@ async def init_db():
             )
         ''')
         
+        # 2. МИГРАЦИЯ (САМОЕ ВАЖНОЕ)
+        # Мы добавляем недостающие колонки ПЕРЕД тем, как вставлять данные
+        new_columns = [
+            ("users", "player_number", "INTEGER"),
+            ("users", "is_injured", "INTEGER DEFAULT 0"),
+            ("users", "is_banned", "INTEGER DEFAULT 0"),
+            ("users", "ban_reason", "TEXT"),
+            ("users", "casino_wins", "INTEGER DEFAULT 0"),
+            ("users", "casino_losses", "INTEGER DEFAULT 0"),
+            ("users", "total_casino_profit", "INTEGER DEFAULT 0"),
+            ("users", "elephant_skin", "INTEGER DEFAULT 0"),
+            ("promocodes", "created_by", "TEXT DEFAULT 'Unknown'"),
+            ("promocodes", "created_at", "TEXT"),
+            ("shop_items", "currency", "TEXT DEFAULT 'balance'"),
+            ("admins", "can_edit_promos", "INTEGER DEFAULT 0")
+        ]
+        
+        for table, column, col_type in new_columns:
+            try:
+                await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+                # Игнорируем ошибку, если колонка уже есть
+            except:
+                pass
+        
+        await db.commit()
+
+        # 3. ВСТАВКА ДАННЫХ ПО УМОЛЧАНИЮ
+        # Теперь это безопасно, так как колонки точно существуют
+        await db.execute('''
+            INSERT OR IGNORE INTO admins (username, added_by, added_at, can_edit_promos)
+            VALUES (?, 'system', ?, 1)
+        ''', (MAIN_ADMIN_USERNAME, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        
+        # Добавляем стандартные товары (с проверкой на существование)
+        for name, price in DEFAULT_SHOP_ITEMS:
+            await db.execute('INSERT OR IGNORE INTO shop_items (name, price, currency) VALUES (?, ?, "balance")', (name, price))
+        
         default_settings = [
             ("maintenance_mode", "0"),
             ("feed_cost", "150"),
@@ -279,6 +306,20 @@ async def init_db():
             await db.execute("INSERT OR IGNORE INTO bot_settings (key, value) VALUES (?, ?)", (key, value))
         
         await db.commit()
+        
+        # 4. ФИНАЛЬНАЯ ПРОВЕРКА НОМЕРОВ ИГРОКОВ
+        async with db.execute("SELECT user_id FROM users WHERE player_number IS NULL ORDER BY rowid") as cursor:
+            users_without_number = await cursor.fetchall()
+        
+        if users_without_number:
+            async with db.execute("SELECT COALESCE(MAX(player_number), 0) FROM users") as cursor:
+                max_num = (await cursor.fetchone())[0]
+            
+            for i, (uid,) in enumerate(users_without_number, start=max_num + 1):
+                await db.execute("UPDATE users SET player_number = ? WHERE user_id = ?", (i, uid))
+            await db.commit()
+        
+        print("✅ База данных успешно инициализирована (все колонки на месте)!")
         
         # Миграция старой БД
         new_columns = [
@@ -5397,5 +5438,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
