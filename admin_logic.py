@@ -12,69 +12,94 @@ from config import AdminStates
 admin_router = Router()
 
 # =====================================
-# 🛡️ АДМИН-ПАНЕЛЬ 2.0 (ADMIN OS)
+# 🤡 СИСТЕМА "ФЕЙКОВЫЙ АДМИН"
 # =====================================
 
-@admin_router.callback_query(F.data == "admin_panel")
-async def admin_os_entry(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    user = await db.get_user(user_id)
+async def show_admin_reply_keyboard(user_id: int):
+    """Возвращает Reply-клавиатуру, только если юзер - админ или фейк-админ."""
+    is_true_admin = await db.is_admin(user_id)
+    is_fake = await db.is_fake_admin(user_id)
 
-    # 🤡 Логика для Фейк-админа
-    if user and user['is_fake_admin']:
-        await callback.message.edit_text(
+    if is_true_admin or is_fake:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [KeyboardButton(text="🛠 Панель")]
+        ])
+    return None # Для обычных юзеров
+
+@admin_router.message(F.text == "🛠 Панель")
+async def handle_panel_button(message: Message, state: FSMContext):
+    await state.clear()
+    user_id = message.from_user.id
+    
+    # 🤡 Фейковый админ
+    if await db.is_fake_admin(user_id):
+        await message.answer(
             "🔒 **Hedgehog AdminOS**... Требуется авторизация...",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="[ 🔓 Войти в систему ]", url="https://t.me/addstickers/totallynormalstickerpackk_by_fStikBot")]
             ])
         )
-        await callback.answer()
         return
 
-    # 👑 Для настоящего админа
-    if not await db.is_admin(user_id):
-        await callback.answer("❌ Доступ запрещен.", show_alert=True)
-        return
+    # 👑 Настоящий админ
+    if await db.is_admin(user_id):
+        await message.answer(
+            "🔒 **Hedgehog AdminOS v3.8**... Доступ разрешен...",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="[ 🔓 Войти в систему ]", callback_data="admin_os_login")]
+            ])
+        )
+    # Обычные пользователи эту кнопку не увидят, но на всякий случай
 
-    await callback.message.edit_text(
-        "🔒 **Hedgehog AdminOS v3.8**... Доступ разрешен...",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="[ 🔓 Войти в систему ]", callback_data="admin_os_login")]
-        ])
-    )
 
 @admin_router.callback_query(F.data == "admin_os_login")
 async def admin_os_main_menu(callback: CallbackQuery):
-    # ... (здесь будет клавиатура с папками: Игроки, Маркетинг и т.д.)
-    await callback.message.edit_text("Главное меню AdminOS")
+    # Создаем "папки" админ-панели
+    buttons = [
+        [InlineKeyboardButton(text="👥 Игроки", callback_data="admin_folder_players")],
+        [InlineKeyboardButton(text="📢 Маркетинг", callback_data="admin_folder_marketing")],
+        [InlineKeyboardButton(text="🛒 Контент", callback_data="admin_folder_content")],
+        [InlineKeyboardButton(text="⚙️ Настройки", callback_data="admin_folder_settings")],
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")] # Статистика - отдельный экран
+    ]
+    await callback.message.edit_text("🗄️ **AdminOS** / Главная", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 # =====================================
-# 🤡 СИСТЕМА "ФЕЙКОВЫЙ АДМИН"
+# FOLDER: Игроки
 # =====================================
+@admin_router.callback_query(F.data == "admin_folder_players")
+async def admin_folder_players(callback: CallbackQuery):
+    buttons = [
+        [InlineKeyboardButton(text="🔍 Поиск / Бан", callback_data="admin_player_search")],
+        [InlineKeyboardButton(text="👻 Управление Фейк-Админами", callback_data="admin_fake_admin_menu")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_os_login")]
+    ]
+    await callback.message.edit_text("🗄️ **AdminOS** / 👥 Игроки", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
-async def add_fake_admin(user_id: int):
-    await db.update_user_column(user_id, 'is_fake_admin', 1)
-
-async def remove_fake_admin(user_id: int):
-    await db.update_user_column(user_id, 'is_fake_admin', 0)
-
-# ... (обработчики для кнопок добавления/удаления в админке)
+@admin_router.callback_query(F.data == "admin_fake_admin_menu")
+async def fake_admin_menu(callback: CallbackQuery):
+    # ... (кнопки "Добавить фейка", "Удалить фейка")
+    pass
 
 # =====================================
 # 🛡️ ЗАЩИТА ОТ КОЛЛИЗИЙ (RACE CONDITION)
 # =====================================
 
-async def moderate_ad(callback: CallbackQuery, ad_id: int, decision: str):
-    async with db.lock: # Условный лок, для примера
-        ad = await db.get_ad(ad_id) # Функция для получения заявки
+async def approve_ad(callback: CallbackQuery, ad_id: int):
+    moderator_username = callback.from_user.username
+    async with db.db_lock:
+        ad = await db.get_ad_for_moderation(ad_id)
         if ad['status'] != 'pending':
-            processed_by = ad.get('processed_by', '@Username') # Нужно добавить это поле в БД
-            await callback.answer(f"✋ Заявка уже обработана администратором {processed_by}!", show_alert=True)
-            # Обновляем сообщение, убирая кнопки
-            await callback.message.edit_caption(caption=callback.message.caption + f"\n\n(Обработано: {processed_by})")
+            await callback.answer(f"✋ Заявка уже обработана администратором @{ad['moderator_username']}!", show_alert=True)
+            await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n(Обработано @{ad['moderator_username']})", reply_markup=None)
             return
         
-        # ... (логика одобрения/отклонения)
-        # await db.update_ad_status(ad_id, decision, processed_by=callback.from_user.username)
+        # Обновляем статус с указанием модератора
+        await db.update_ad_status(ad_id, 'approved', moderator_username)
+        # ... (отправка уведомления юзеру)
+    await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n✅ Одобрено вами", reply_markup=None)
+    await callback.answer("✅ Реклама одобрена!")
 
-# ... (остальная логика админ-панели: бан, рассылка, управление контентом)
+# ... (аналогичная логика для reject_ad, approve_book, reject_book)
+
+# ... (здесь будет остальная логика админки: рассылки, промокоды, контент и т.д., разбитая по папкам)
