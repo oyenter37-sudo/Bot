@@ -8,7 +8,7 @@ from aiogram.fsm.state import State, StatesGroup
 # ⚙️ ГЛАВНЫЕ НАСТРОЙКИ
 # =====================================
 
-BOT_TOKEN = "7230762282:AAFz9OmJZoLZAw3TMjlxf8yHsUBdHtwdqmg" # ВАШ ТОКЕН
+BOT_TOKEN = "7230762282:AAFUR5TOhC4dK-i7QPz3PyHzYYVycwSc85g" # ВАШ ТОКЕН
 MAIN_ADMIN_USERNAME = "venter8" # @username главного админа
 CHANNEL_ID = -1002483918 # ID канала для подписки
 CHANNEL_LINK = "https://t.me/+hGOqFr0HoQM3Mjgy" # Ссылка на канал
